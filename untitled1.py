@@ -31,15 +31,16 @@ except Exception as e:
 print(df.dtypes)
 
 df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')  # Use 'coerce' to handle invalid parsing
-df['file_size'] = pd.to_numeric(df['file_size'], errors='coerce')
+# df['file_size'] = pd.to_numeric(df['file_size'], errors='coerce')
 df['file_size_in_bytes'] = pd.to_numeric(df['file_size_in_bytes'], errors='coerce')
 df['time_taken'] = pd.to_numeric(df['time_taken'], errors='coerce')
 df['log_level'] = df['log_level'].astype('category')
 df['deployment_success'] = df.groupby('deployment_id')['log_level'].transform(lambda x: 1 if 'success' in x.values else 0)
 # Drop unnecessary columns
-df.drop(columns=['event_id', 'file_name'], inplace=True)
+# df.drop(columns=['event_id', 'file_name'], inplace=True)
+# df.drop(columns=['file_size'], inplace=True)
 df.fillna({
-    'file_size': df['file_size'].mean(),
+    # 'file_size': df['file_size'].mean(),
     'file_size_in_bytes': df['file_size_in_bytes'].mean(),
     'time_taken': df['time_taken'].mean(),
     'log_message': 'Unknown'
@@ -52,9 +53,65 @@ df.fillna({
 from sklearn.preprocessing import StandardScaler
 
 scaler = StandardScaler()
-df[['file_size', 'file_size_in_bytes', 'time_taken']] = scaler.fit_transform(df[['file_size', 'file_size_in_bytes', 'time_taken']])
+df[['file_size_in_bytes', 'time_taken']] = scaler.fit_transform(df[['file_size_in_bytes', 'time_taken']])
 
 
 
 display(df.head(100))   # Display the first 5 rows of the DataFrame
 
+from sklearn.model_selection import train_test_split
+features = df.drop(columns=['deployment_success', 'timestamp', 'project_id', 'deployment_id','event_id','file_name','log_level'])
+target = df['deployment_success']
+deployment_ids = df['deployment_id']  # Keep deployment_id separately
+# Split data, keeping 'deployment_id' in test set
+
+# X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
+# Split data
+X_train, X_test, y_train, y_test, deployment_ids_train, deployment_ids_test = train_test_split(
+    features, target, deployment_ids, test_size=0.3, random_state=42
+)
+
+from sklearn.ensemble import RandomForestClassifier
+# Feature engineering
+df['hour'] = df['timestamp'].dt.hour
+df['day_of_week'] = df['timestamp'].dt.dayofweek
+df['month'] = df['timestamp'].dt.month
+# df = pd.get_dummies(df, columns=['log_message'], drop_first=True)
+# Create a Random Forest Classifier
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+
+# Train the model
+model.fit(X_train, y_train)
+
+# Check the shapes of the resulting datasets
+print("Training feature set shape:", X_train.shape)
+print("Testing feature set shape:", X_test.shape)
+print("Training target set shape:", y_train.shape)
+print("Testing target set shape:", y_test.shape)
+print("deployment_ids_test:\n", deployment_ids_test)
+
+from sklearn.metrics import accuracy_score, classification_report
+# Make predictions on the test set
+y_pred = model.predict(X_test)
+
+test_results = pd.DataFrame({
+    'deployment_id': deployment_ids_test,
+    'prediction': y_pred
+})
+# Calculate accuracy
+accuracy = accuracy_score(y_test, y_pred)
+print(f'Accuracy: {accuracy:.2f}')
+print(y_pred)
+
+# Display classification report
+print(classification_report(y_test, y_pred))
+
+# Aggregate predictions by `deployment_id` using majority voting
+deployment_predictions = (
+    test_results.groupby('deployment_id')['prediction']
+    .mean()  # Compute mean of predictions for each deployment_id
+    .apply(lambda x: 1 if x > 0.5 else 0)  # Apply threshold
+)
+
+print("Aggregated Deployment Predictions:")
+print(deployment_predictions)
